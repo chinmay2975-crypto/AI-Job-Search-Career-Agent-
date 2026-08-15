@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+langgraph
+langchain-groq
+groq
+streamlit
+pypdf
+pdfplumber
+reportlab
+scikit-learn
+python-dotenv
+httpx
+pydantic
