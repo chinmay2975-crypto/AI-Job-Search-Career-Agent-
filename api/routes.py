@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from agents.graph import build_graph
+from db import get_repository
 
 router = APIRouter()
 _graph = build_graph()
@@ -29,8 +30,12 @@ async def run_pipeline(
     config = {"configurable": {"thread_id": candidate_id or str(uuid.uuid4())}}
     result = _graph.invoke(initial_state, config=config)
 
+    candidate = result.get("candidate")
+    if candidate:
+        get_repository().save_candidate(candidate_id, candidate)
+
     return {
-        "candidate": result.get("candidate"),
+        "candidate": candidate,
         "matches": result.get("matches", []),
         "skill_gaps": result.get("skill_gaps", []),
     }

@@ -5,9 +5,8 @@ from db.sqlite_repository import SQLiteRepository
 
 
 def get_repository() -> Repository:
-    database_url = os.getenv("DATABASE_URL")
-    if database_url:
+    if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY"):
         from db.supabase_repository import SupabaseRepository
 
-        return SupabaseRepository(database_url)
+        return SupabaseRepository()
     return SQLiteRepository()

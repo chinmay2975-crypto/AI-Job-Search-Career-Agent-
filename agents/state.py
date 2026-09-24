@@ -39,3 +39,17 @@ class GraphState(TypedDict, total=False):
     matches: list[MatchResult]
     skill_gaps: list[str]
     error: str
+
+
+class ApplicationState(TypedDict, total=False):
+    application_id: str
+    candidate_id: str
+    candidate: CandidateProfile
+    job: JobListing
+    match_score: float
+    ats_type: str
+    execution_strategy: str  # auto_submit | assisted_draft | blocked
+    cover_letter_text: str
+    human_approved: bool
+    below_threshold: bool
+    status: str
