@@ -14,8 +14,8 @@ def _route_after_classify(state: ApplicationState) -> str:
 
 
 def _route_after_draft(state: ApplicationState) -> str:
-    # auto_submit (synthetic/greenhouse/lever) goes straight to the executor - DRY_RUN and the
-    # daily cap are the safety net there, not a human gate. assisted_draft (workday/indeed)
+    # auto_submit (synthetic/greenhouse/lever) goes straight to the executor - DRY_RUN is the
+    # safety net there, not a human gate. assisted_draft (workday/indeed)
     # always needs a human to look at the draft first, even though it can never auto-submit.
     return "apply" if state.get("execution_strategy") == "auto_submit" else "await_approval"
 

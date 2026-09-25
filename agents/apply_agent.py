@@ -1,8 +1,5 @@
 from agents.state import AutonomousState
-from db import get_repository
 from services import application_runner, audit_log
-from services.ats_classifier import classify, execution_strategy
-from services.safety_rails import check_daily_cap, is_dry_run
 
 
 async def run(state: AutonomousState) -> AutonomousState:
@@ -12,11 +9,6 @@ async def run(state: AutonomousState) -> AutonomousState:
     job = entry["job"]
     score = entry["overall_score"]
     candidate_id = state["candidate_id"]
-
-    auto_submit = execution_strategy(classify(job["url"])) == "auto_submit"
-    if auto_submit and not is_dry_run() and not check_daily_cap(get_repository(), candidate_id):
-        audit_log.record(job, "skipped", score, detail="daily auto-submit cap reached; stopping this run")
-        return {**state, "apply_queue": queue, "cap_reached": True}
 
     try:
         outcome = await application_runner.start_application(

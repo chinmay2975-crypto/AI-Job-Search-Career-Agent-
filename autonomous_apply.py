@@ -24,7 +24,7 @@ from db import get_repository  # noqa: E402
 from db.sqlite_repository import resolve_db_path  # noqa: E402
 from services.audit_log import AUDIT_LOG_PATH  # noqa: E402
 from services.candidate_profile import load_profile, missing_required_fields  # noqa: E402
-from services.safety_rails import daily_auto_submit_cap, is_dry_run, match_score_threshold  # noqa: E402
+from services.safety_rails import is_dry_run, match_score_threshold  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:
@@ -33,7 +33,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", required=True, help="Path to your resume PDF")
     parser.add_argument("--query", default="", help="Role keywords; default: profile current_title or top resume skills")
     parser.add_argument("--platforms", default="greenhouse,lever", help="Comma-separated: greenhouse,lever,workday")
-    parser.add_argument("--max-jobs", type=int, default=20, help="Max applications this run (daily cap still applies)")
+    parser.add_argument("--max-jobs", type=int, default=20, help="Max applications this run")
     parser.add_argument("--include-remote", action="store_true", help="Also include remote roles")
     parser.add_argument("--candidate-id", default="", help="Defaults to the profile email")
     parser.add_argument("--profile", default=None, help="Path to candidate_profile.yaml")
@@ -63,8 +63,6 @@ def _print_summary(state: dict) -> None:
         counts = Counter(r["status"] for r in results)
         print("\nTotals: " + ", ".join(f"{k} {v}" for k, v in counts.most_common()))
 
-    if state.get("cap_reached"):
-        print(f"\nStopped early: daily auto-submit cap ({daily_auto_submit_cap()}) reached.")
     print(f"\nAudit log: {AUDIT_LOG_PATH}")
 
 
@@ -97,7 +95,7 @@ def main() -> int:
         return 2
 
     mode = "DRY RUN - forms are filled and screenshotted, Submit is NOT clicked" if is_dry_run() else (
-        f"LIVE - applications are submitted (daily cap {daily_auto_submit_cap()})"
+        f"LIVE - applications are submitted (up to {args.max_jobs} this run)"
     )
     print(f"Mode: {mode}\nMatch threshold: {match_score_threshold():g}")
 

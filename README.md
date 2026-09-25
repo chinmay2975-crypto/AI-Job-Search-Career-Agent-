@@ -71,7 +71,7 @@ Everything is stored in one local SQLite file, `data/career_agent.db`, created a
 use. There is no database server to run and no database credentials. The path is resolved from the
 project folder rather than the directory you run a command from, so the API, Streamlit, and the CLI
 always share the same database — that matters because it is what prevents applying to the same job
-twice and enforces the daily cap. Set `SQLITE_DB_PATH` in `.env` to put it elsewhere.
+twice. Set `SQLITE_DB_PATH` in `.env` to put it elsewhere.
 
 The file holds your application history and parsed resume, so it is gitignored. To back it up, copy
 `data/career_agent.db` while nothing is running (or copy it together with its `-wal`/`-shm` files).
@@ -139,7 +139,7 @@ specialists ([agents/autonomous_graph.py](agents/autonomous_graph.py)):
 > **`DRY_RUN`** (in `.env`) decides whether Submit is clicked. With `DRY_RUN=true` the agent still fills
 > every form and saves a screenshot to `logs/screenshots/`, but submits nothing — use it after changing
 > your profile. Note that attaching the resume may let the ATS parse it even in a dry run; no application
-> is created. `AUTO_SUBMIT_DAILY_CAP` (default 5) limits real submissions per day.
+> is created. There is no daily limit; `--max-jobs` (default 20) caps how many applications one run makes.
 
 ## Tests
 

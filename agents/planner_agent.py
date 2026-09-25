@@ -16,7 +16,7 @@ def next_step(state: AutonomousState) -> str:
         return "end"
     if not state.get("matching_done"):
         return "matching"
-    if state.get("apply_queue") and not state.get("cap_reached"):
+    if state.get("apply_queue"):
         return "apply"
     return "end"
 

@@ -83,4 +83,3 @@ class AutonomousState(TypedDict, total=False):
     matching_done: bool
     apply_queue: list[ScoredJob]
     results: list[dict]
-    cap_reached: bool

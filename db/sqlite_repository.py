@@ -16,7 +16,7 @@ def resolve_db_path() -> str:
     """SQLITE_DB_PATH if set (relative paths are taken from the project root), else data/career_agent.db.
 
     Anchored to the project, not the working directory, so the API, Streamlit, and the CLI always share
-    one database - a second database would silently bypass dedupe and the daily cap.
+    one database - a second database would silently bypass the duplicate-application check.
     """
     configured = os.getenv("SQLITE_DB_PATH", "").strip()
     if not configured:
@@ -296,13 +296,3 @@ class SQLiteRepository(Repository):
             (application_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-
-    def count_auto_submits_today(self, candidate_id: str) -> int:
-        today = datetime.now(timezone.utc).date().isoformat()
-        row = self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM applications "
-            "WHERE candidate_id = ? AND execution_strategy = 'auto_submit' "
-            "AND status = 'submitted' AND date(submitted_at) = ?",
-            (candidate_id, today),
-        ).fetchone()
-        return row["cnt"] if row else 0

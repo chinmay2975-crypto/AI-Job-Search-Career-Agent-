@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from agents.state import ApplicationState
 from db import get_repository
 from services import playwright_apply
-from services.safety_rails import check_daily_cap, is_dry_run
+from services.safety_rails import is_dry_run
 
 _AUTO_SUBMIT_FUNC_NAMES = {
     "synthetic": "submit_synthetic_application",
@@ -35,11 +35,6 @@ async def run(state: ApplicationState) -> ApplicationState:
         return {**state, "status": "approved"}
 
     submit = not is_dry_run()
-    if submit and not check_daily_cap(repo, state["candidate_id"]):
-        repo.update_application(application_id, {"status": "failed", "error_log": "daily auto-submit cap reached"})
-        repo.add_application_event(application_id, "submit_failed", "daily auto-submit cap reached")
-        return {**state, "status": "failed"}
-
     submit_fn = getattr(playwright_apply, _AUTO_SUBMIT_FUNC_NAMES.get(ats_type, ""), None)
     if submit_fn is None:
         repo.update_application(application_id, {"status": "failed", "error_log": f"no submitter for {ats_type}"})

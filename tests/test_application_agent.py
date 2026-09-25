@@ -4,7 +4,7 @@ import pytest
 
 from db.sqlite_repository import SQLiteRepository
 from services import ats_classifier
-from services.safety_rails import check_daily_cap, check_idempotent
+from services.safety_rails import check_idempotent
 
 
 @pytest.fixture
@@ -204,30 +204,32 @@ async def test_apply_executor_records_unconfirmed_and_blocks_retry(repo, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_apply_executor_respects_daily_cap(repo, monkeypatch):
+async def test_apply_executor_has_no_daily_limit(repo, monkeypatch):
     monkeypatch.setenv("DRY_RUN", "false")
-    monkeypatch.setenv("AUTO_SUBMIT_DAILY_CAP", "0")
+    from datetime import datetime, timezone
+
     from agents import apply_executor_agent
 
-    application = repo.create_application(
-        {"job_id": "job-6", "candidate_id": "c1", "match_score": 90, "status": "draft"}
-    )
-    state = {
-        "application_id": application["id"],
-        "candidate_id": "c1",
-        "ats_type": "synthetic",
-        "execution_strategy": "auto_submit",
-        "job": {"link": "https://synthetic-jobs.local/postings/x"},
-        "cover_letter_text": "Dear hiring manager...",
-    }
+    for i in range(10):  # plenty of real submissions already today
+        earlier = repo.create_application({"job_id": f"old-{i}", "candidate_id": "c1", "status": "draft"})
+        repo.update_application(earlier["id"], {
+            "status": "submitted", "execution_strategy": "auto_submit",
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        })
 
+    application = repo.create_application({"job_id": "job-6", "candidate_id": "c1", "status": "draft"})
+    state = {
+        "application_id": application["id"], "candidate_id": "c1", "ats_type": "synthetic",
+        "execution_strategy": "auto_submit", "job": {"link": "https://synthetic-jobs.local/postings/x"},
+    }
     with patch("agents.apply_executor_agent.get_repository", return_value=repo), patch(
         "agents.apply_executor_agent.playwright_apply.submit_synthetic_application", new_callable=AsyncMock
     ) as submit_fn:
+        submit_fn.return_value = {"status": "submitted", "application_url": "u", "detail": "", "screenshots": []}
         result = await apply_executor_agent.run(state)
 
-    submit_fn.assert_not_called()
-    assert result["status"] == "failed"
+    submit_fn.assert_called_once()
+    assert result["status"] == "submitted"
 
 
 # --- safety_rails ------------------------------------------------------------
@@ -241,8 +243,3 @@ def test_check_idempotent_blocks_duplicate_non_failed_application(repo):
 def test_check_idempotent_allows_retry_when_nothing_was_sent(repo, status):
     repo.create_application({"job_id": "job-8", "candidate_id": "c1", "status": status})
     assert check_idempotent(repo, "job-8", "c1") is True
-
-
-def test_check_daily_cap(repo, monkeypatch):
-    monkeypatch.setenv("AUTO_SUBMIT_DAILY_CAP", "1")
-    assert check_daily_cap(repo, "c1") is True

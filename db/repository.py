@@ -89,6 +89,3 @@ class Repository(ABC):
 
     @abstractmethod
     def list_application_events(self, application_id: str) -> list[dict[str, Any]]: ...
-
-    @abstractmethod
-    def count_auto_submits_today(self, candidate_id: str) -> int: ...

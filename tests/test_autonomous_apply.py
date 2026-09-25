@@ -139,8 +139,6 @@ def test_matches_location(locations, is_remote, location, include_remote, expect
         ({"candidate": {"x": 1}, "discovery_done": True, "discovered_jobs": [{}], "matching_done": True,
           "apply_queue": [{}]}, "apply"),
         ({"candidate": {"x": 1}, "discovery_done": True, "discovered_jobs": [{}], "matching_done": True,
-          "apply_queue": [{}], "cap_reached": True}, "end"),
-        ({"candidate": {"x": 1}, "discovery_done": True, "discovered_jobs": [{}], "matching_done": True,
           "apply_queue": []}, "end"),
     ],
 )
