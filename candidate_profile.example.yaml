@@ -1,0 +1,68 @@
+# Copy this file to candidate_profile.yaml (gitignored - it holds personal data) and fill it in.
+#
+# The autonomous apply agent answers application questions ONLY from this file and your resume.
+# It never guesses eligibility, compensation, availability, or demographic answers: if a required
+# question isn't covered here (or provably by your resume), that job is marked needs_manual
+# instead of submitted.
+
+first_name: ""
+last_name: ""
+email: ""
+phone: ""                 # include country code, e.g. "+91 9800000000"
+country: "India"          # used for phone country pickers and "country of residence" questions
+current_location: "Pune"  # typed into location autocompletes; first whole-word match is chosen
+current_company: ""
+current_title: ""
+years_experience: 0       # overall professional years; answers "years of experience overall" brackets
+linkedin_url: ""
+github_url: ""
+portfolio_url: ""
+
+# EEO / demographic questions. "decline" picks the option that declines to answer
+# ("Decline To Self Identify", "I don't wish to answer", ...). If a form has no decline option
+# and the question is required, the job goes to needs_manual - set a real value to avoid that.
+eeo:
+  gender: decline
+  race: decline
+  hispanic_ethnicity: decline
+  veteran_status: decline
+  disability_status: decline
+
+# Screening questions, matched by keyword against the question text (case-insensitive,
+# first matching rule wins). Rules with an empty answer are ignored.
+# `answer` is typed into text fields, or matched against dropdown option labels
+# (exact match first, then an option that starts with it, then one that contains it).
+# For multi-select questions, separate several answers with ";".
+custom_answers:
+  - match: ["authorized to work", "authorised to work", "work authorization", "legally eligible", "right to work"]
+    answer: ""            # e.g. "Yes"
+  - match: ["sponsor", "visa"]
+    answer: ""            # e.g. "No"
+  - match: ["notice period"]
+    answer: ""            # e.g. "30 days"
+  - match: ["how soon", "joining", "start date", "earliest", "available to start"]
+    answer: ""            # e.g. "30 Days - 45 days" (match the form's wording where you can)
+  - match: ["current ctc", "current salary", "current compensation", "current annual"]
+    answer: ""
+  - match: ["expected ctc", "expected salary", "salary expectation", "desired salary", "expected compensation"]
+    answer: ""
+  - match: ["current location", "currently located", "currently reside", "where are you located"]
+    answer: "Pune"
+  - match: ["preferred location", "preferred work location"]
+    answer: "Pune"
+  - match: ["relocate", "relocation"]
+    answer: ""            # e.g. "Yes"
+  - match: ["currently working", "currently employed"]
+    answer: ""
+  - match: ["fresher"]
+    answer: ""
+  - match: ["hybrid", "work from office", "wfo", "on-site", "onsite", "in office"]
+    answer: ""
+  - match: ["shift"]
+    answer: ""
+  - match: ["holding offer", "other offer", "offer in hand"]
+    answer: ""            # e.g. "None"
+  - match: ["last working day"]
+    answer: ""            # e.g. "Not serving notice"
+  - match: ["privacy notice", "privacy policy", "candidate privacy"]
+    answer: ""            # e.g. "Acknowledge" - only set this if you accept these notices

@@ -1,11 +1,30 @@
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from db.repository import Repository
+from db.repository import RETRYABLE_STATUSES, Repository
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "career_agent.db"
+
+
+def resolve_db_path() -> str:
+    """SQLITE_DB_PATH if set (relative paths are taken from the project root), else data/career_agent.db.
+
+    Anchored to the project, not the working directory, so the API, Streamlit, and the CLI always share
+    one database - a second database would silently bypass dedupe and the daily cap.
+    """
+    configured = os.getenv("SQLITE_DB_PATH", "").strip()
+    if not configured:
+        return str(DEFAULT_DB_PATH)
+    if configured == ":memory:":
+        return configured
+    path = Path(configured).expanduser()
+    return str(path if path.is_absolute() else PROJECT_ROOT / path)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS candidates (candidate_id TEXT PRIMARY KEY, profile TEXT NOT NULL);
@@ -52,6 +71,10 @@ CREATE TABLE IF NOT EXISTS application_events (
     detail TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_applications_job_candidate ON applications(job_id, candidate_id);
+CREATE INDEX IF NOT EXISTS idx_applications_candidate_status ON applications(candidate_id, status);
+CREATE INDEX IF NOT EXISTS idx_application_events_application_id ON application_events(application_id);
 """
 
 _APPLICATION_COLUMNS = [
@@ -72,10 +95,16 @@ def _row_to_dict(row: sqlite3.Row, columns: list[str]) -> dict[str, Any]:
 
 
 class SQLiteRepository(Repository):
-    def __init__(self, db_path: str = "career_agent.db"):
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+    def __init__(self, db_path: str | None = None):
+        db_path = db_path or resolve_db_path()
+        if db_path != ":memory:":
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        # The API server and the CLI can write at the same time: wait for a lock instead of failing,
+        # and use WAL so readers (the Streamlit tab) never block writers.
+        self._conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10)
         self._conn.row_factory = sqlite3.Row
+        if db_path != ":memory:":
+            self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -243,11 +272,12 @@ class SQLiteRepository(Repository):
         rows = self._conn.execute(query, params).fetchall()
         return [_row_to_dict(r, _APPLICATION_COLUMNS) for r in rows]
 
-    def get_non_failed_application_for_job(self, job_id: str, candidate_id: str) -> dict[str, Any] | None:
+    def get_blocking_application_for_job(self, job_id: str, candidate_id: str) -> dict[str, Any] | None:
+        placeholders = ", ".join("?" for _ in RETRYABLE_STATUSES)
         row = self._conn.execute(
-            "SELECT * FROM applications WHERE job_id = ? AND candidate_id = ? AND status != 'failed' "
+            f"SELECT * FROM applications WHERE job_id = ? AND candidate_id = ? AND status NOT IN ({placeholders}) "
             "ORDER BY created_at DESC LIMIT 1",
-            (job_id, candidate_id),
+            (job_id, candidate_id, *RETRYABLE_STATUSES),
         ).fetchone()
         return _row_to_dict(row, _APPLICATION_COLUMNS) if row else None
 

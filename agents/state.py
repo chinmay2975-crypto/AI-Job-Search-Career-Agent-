@@ -53,3 +53,34 @@ class ApplicationState(TypedDict, total=False):
     human_approved: bool
     below_threshold: bool
     status: str
+    resume_path: str
+    profile: dict
+    submit_detail: str
+
+
+class ScoredJob(TypedDict, total=False):
+    job: JobListing
+    overall_score: float
+    components: dict[str, float]
+    eligible: bool
+    reason: str
+
+
+class AutonomousState(TypedDict, total=False):
+    candidate_id: str
+    location: str
+    query: str
+    platforms: list[str]
+    include_remote: bool
+    max_jobs: int
+    resume_path: str
+    profile: dict
+    candidate: CandidateProfile
+    discovered_jobs: list[JobListing]
+    discovery_errors: list[str]
+    discovery_done: bool
+    scored_jobs: list[ScoredJob]
+    matching_done: bool
+    apply_queue: list[ScoredJob]
+    results: list[dict]
+    cap_reached: bool

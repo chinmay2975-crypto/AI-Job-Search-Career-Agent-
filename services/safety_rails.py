@@ -21,5 +21,6 @@ def check_daily_cap(repo: Repository, candidate_id: str) -> bool:
 
 
 def check_idempotent(repo: Repository, job_id: str, candidate_id: str) -> bool:
-    """True if there is no existing non-failed application for this job/candidate pair."""
-    return repo.get_non_failed_application_for_job(job_id, candidate_id) is None
+    """True unless this job/candidate already has an application that may have reached the employer
+    (anything outside RETRYABLE_STATUSES: submitted, unconfirmed, awaiting approval, ...)."""
+    return repo.get_blocking_application_for_job(job_id, candidate_id) is None

@@ -1,12 +1,7 @@
-import os
-
 from db.repository import Repository
 from db.sqlite_repository import SQLiteRepository
 
 
 def get_repository() -> Repository:
-    if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY"):
-        from db.supabase_repository import SupabaseRepository
-
-        return SupabaseRepository()
+    """Local SQLite database (data/career_agent.db, or SQLITE_DB_PATH)."""
     return SQLiteRepository()

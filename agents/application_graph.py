@@ -44,6 +44,6 @@ def build_application_graph():
     graph.add_conditional_edges("await_approval", _route_after_approval, {"apply": "apply_executor", "rejected_end": END})
     graph.add_edge("apply_executor", END)
 
-    # MemorySaver: durable enough for a single running process. The Postgres `applications` row
-    # (not this checkpoint) is the source of truth if the process restarts mid-approval.
+    # MemorySaver: durable enough for a single running process. The `applications` row in the
+    # database (not this checkpoint) is the source of truth if the process restarts mid-approval.
     return graph.compile(checkpointer=MemorySaver())

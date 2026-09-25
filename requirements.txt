@@ -11,6 +11,6 @@ scikit-learn
 python-dotenv
 httpx
 pydantic
-supabase
 playwright
 pytest-asyncio
+pyyaml

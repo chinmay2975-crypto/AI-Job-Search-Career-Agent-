@@ -23,5 +23,5 @@ def build_graph():
     graph.add_edge("matching", "skill_gap")
     graph.add_edge("skill_gap", END)
 
-    # MemorySaver for now; swap for a Repository-backed checkpointer once Supabase is wired up.
+    # In-memory checkpoints: each pipeline run completes within one request, so nothing needs to persist.
     return graph.compile(checkpointer=MemorySaver())

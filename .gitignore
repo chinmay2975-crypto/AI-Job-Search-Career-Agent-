@@ -4,5 +4,11 @@ __pycache__/
 .venv/
 venv/
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+data/
 *.log
 .pytest_cache/
+logs/
+candidate_profile.yaml

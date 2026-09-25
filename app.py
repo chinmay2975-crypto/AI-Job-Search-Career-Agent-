@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import streamlit as st
 import httpx
 
@@ -90,7 +92,10 @@ with applications_tab:
     with col1:
         status_filter = st.selectbox(
             "Status",
-            ["(any)", "draft", "pending_approval", "approved", "submitted", "failed", "rejected_by_user", "blocked"],
+            [
+                "(any)", "draft", "pending_approval", "approved", "submitted", "needs_manual", "unconfirmed",
+                "dry_run", "failed", "rejected_by_user", "blocked",
+            ],
         )
     with col2:
         min_score_filter = st.number_input("Min match score", min_value=0, max_value=100, value=0)
@@ -121,8 +126,22 @@ with applications_tab:
         ats_type = application.get("ats_type", "")
         score = application.get("match_score", 0)
 
-        with st.expander(f"{status.upper()} — {ats_type or 'unclassified'} — {score}% match"):
-            if status == "pending_approval":
+        title = application.get("job_title") or "Untitled"
+        with st.expander(f"{status.upper()} — {title} — {ats_type or 'unclassified'} — {score}% match"):
+            if status in ("needs_manual", "unconfirmed", "dry_run"):
+                detail, _, shots = (application.get("error_log") or "").partition(" | screenshots: ")
+                if status == "needs_manual":
+                    st.warning(f"Nothing was sent. {detail}")
+                elif status == "unconfirmed":
+                    st.error(f"Submit was clicked but no confirmation was detected — check your email/the posting. {detail}")
+                else:
+                    st.info(detail or "Dry run: the form was filled but not submitted.")
+                if application.get("job_url"):
+                    st.markdown(f"[Open the original posting]({application['job_url']})")
+                for shot in filter(None, (s.strip() for s in shots.split(","))):
+                    if Path(shot).exists():
+                        st.image(shot, caption=Path(shot).name)
+            elif status == "pending_approval":
                 edited_letter = st.text_area(
                     "Cover letter (editable)", value=application.get("cover_letter_text", ""), key=f"letter_{app_id}"
                 )

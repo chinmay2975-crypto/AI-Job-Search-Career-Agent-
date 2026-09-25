@@ -1,4 +1,6 @@
+import json
 import os
+import re
 
 from groq import Groq
 
@@ -29,3 +31,19 @@ def complete(prompt: str, system: str | None = None, temperature: float = 0.2) -
         temperature=temperature,
     )
     return response.choices[0].message.content
+
+
+def extract_json(raw: str):
+    """Parse JSON from an LLM reply, tolerating ```json fences or prose around it. None if absent."""
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (raw or "").strip())
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"(\{.*\}|\[.*\])", text, flags=re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return None
+    return None

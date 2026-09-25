@@ -1,9 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+# Application statuses where nothing was sent to the employer, so the job may be tried again.
+# Every other status (submitted, unconfirmed, pending_approval, approved, blocked, ...) blocks a re-apply.
+RETRYABLE_STATUSES = ("failed", "dry_run", "needs_manual")
+
 
 class Repository(ABC):
-    """Persistence interface for candidate state. Implementations: SQLite (local dev), Supabase (prod)."""
+    """Persistence interface for candidate and application state. Implementation: SQLiteRepository."""
 
     @abstractmethod
     def get_candidate(self, candidate_id: str) -> dict[str, Any] | None: ...
@@ -77,7 +81,8 @@ class Repository(ABC):
     ) -> list[dict[str, Any]]: ...
 
     @abstractmethod
-    def get_non_failed_application_for_job(self, job_id: str, candidate_id: str) -> dict[str, Any] | None: ...
+    def get_blocking_application_for_job(self, job_id: str, candidate_id: str) -> dict[str, Any] | None:
+        """Latest application for this job/candidate whose status is not in RETRYABLE_STATUSES."""
 
     @abstractmethod
     def add_application_event(self, application_id: str, event_type: str, detail: str = "") -> None: ...

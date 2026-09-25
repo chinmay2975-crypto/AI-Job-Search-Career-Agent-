@@ -4,6 +4,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from agents.graph import build_graph
 from db import get_repository
+from services.application_runner import stored_resume_path
 
 router = APIRouter()
 _graph = build_graph()
@@ -33,6 +34,10 @@ async def run_pipeline(
     candidate = result.get("candidate")
     if candidate:
         get_repository().save_candidate(candidate_id, candidate)
+        # Kept locally so a later Apply can attach the resume file to ATS forms.
+        resume_path = stored_resume_path(candidate_id)
+        resume_path.parent.mkdir(parents=True, exist_ok=True)
+        resume_path.write_bytes(resume_bytes)
 
     return {
         "candidate": candidate,
