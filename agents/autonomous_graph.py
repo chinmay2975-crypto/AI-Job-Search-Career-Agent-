@@ -23,6 +23,11 @@ def build_autonomous_graph():
     return graph.compile()
 
 
-def recursion_limit(max_jobs: int) -> int:
-    """Each applied job costs two graph steps (planner -> apply); leave headroom for the rest."""
-    return 2 * max_jobs + 20
+# Upper bound on postings one source can contribute: a page of search results plus expanded boards.
+_MAX_POSTINGS_PER_SOURCE = 40
+
+
+def recursion_limit(max_jobs: int, source_count: int = 1) -> int:
+    """Each queued posting costs two graph steps (planner -> apply). Auto-submissions are capped by
+    max_jobs, but drafts and links for you to apply yourself aren't, so bound by what discovery can find."""
+    return 2 * (max_jobs + source_count * _MAX_POSTINGS_PER_SOURCE) + 20

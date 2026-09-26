@@ -22,6 +22,7 @@ load_dotenv()
 from agents.autonomous_graph import build_autonomous_graph, recursion_limit  # noqa: E402
 from db import get_repository  # noqa: E402
 from db.sqlite_repository import resolve_db_path  # noqa: E402
+from services.ats_discovery import SUPPORTED_PLATFORMS  # noqa: E402
 from services.audit_log import AUDIT_LOG_PATH  # noqa: E402
 from services.candidate_profile import load_profile, missing_required_fields  # noqa: E402
 from services.safety_rails import is_dry_run, match_score_threshold  # noqa: E402
@@ -32,9 +33,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--location", required=True, help='Target location, e.g. "Pune"')
     parser.add_argument("--resume", required=True, help="Path to your resume PDF")
     parser.add_argument("--query", default="", help="Role keywords; default: profile current_title or top resume skills")
-    parser.add_argument("--platforms", default="greenhouse,lever", help="Comma-separated: greenhouse,lever,workday")
+    parser.add_argument("--platforms", default=",".join(SUPPORTED_PLATFORMS),
+                        help="Comma-separated sources (default: all): " + ",".join(SUPPORTED_PLATFORMS))
     parser.add_argument("--max-jobs", type=int, default=20, help="Max applications this run")
     parser.add_argument("--include-remote", action="store_true", help="Also include remote roles")
+    parser.add_argument("--job-type", choices=["internship", "any"], default=None,
+                        help="internship = intern roles only; default: job_type in candidate_profile.yaml")
     parser.add_argument("--candidate-id", default="", help="Defaults to the profile email")
     parser.add_argument("--profile", default=None, help="Path to candidate_profile.yaml")
     return parser.parse_args()
@@ -49,17 +53,23 @@ def _print_summary(state: dict) -> None:
     for error in state.get("discovery_errors") or []:
         print(f"  discovery error: {error}")
 
+    if discovered:
+        per_site = Counter(j.get("platform", "?") for j in discovered)
+        print("  by source: " + ", ".join(f"{k} {v}" for k, v in per_site.most_common()))
+
     if scored:
         print("\nScores:")
         for s in scored:
             job = s["job"]
-            flag = "APPLY" if s["eligible"] else "skip "
-            print(f"  [{flag}] {s['overall_score']:5.1f}  {job['company'][:22]:22}  {job['title'][:48]:48}  {s['reason']}")
+            flag = "KEEP " if s["eligible"] else "skip "
+            print(f"  [{flag}] {s['overall_score']:5.1f}  {job.get('platform', '')[:11]:11}  {job['company'][:20]:20}  "
+                  f"{job['title'][:44]:44}  {s['reason']}")
 
     if results:
-        print("\nApplications:")
+        print("\nResults (apply_yourself = listed for you; pending_approval = drafted for you to send):")
         for r in results:
-            print(f"  {r['status']:17} {r['score']:5.1f}  {r['company'][:22]:22}  {r['title'][:40]:40}  {r.get('detail', '')[:120]}")
+            print(f"  {r['status']:17} {r['score']:5.1f}  {r.get('platform', '')[:11]:11}  {r['company'][:20]:20}  "
+                  f"{r['title'][:38]:38}  {r.get('detail', '')[:100]}")
         counts = Counter(r["status"] for r in results)
         print("\nTotals: " + ", ".join(f"{k} {v}" for k, v in counts.most_common()))
 
@@ -97,7 +107,10 @@ def main() -> int:
     mode = "DRY RUN - forms are filled and screenshotted, Submit is NOT clicked" if is_dry_run() else (
         f"LIVE - applications are submitted (up to {args.max_jobs} this run)"
     )
-    print(f"Mode: {mode}\nMatch threshold: {match_score_threshold():g}")
+    job_type = args.job_type or str(profile.get("job_type") or "any").strip().lower()
+    internship_only = job_type == "internship"
+    print(f"Mode: {mode}\nRoles: {'internships only' if internship_only else 'any'}\n"
+          f"Match threshold: {match_score_threshold():g}")
 
     initial_state = {
         "candidate_id": candidate_id,
@@ -105,13 +118,15 @@ def main() -> int:
         "query": args.query,
         "platforms": [p.strip() for p in args.platforms.split(",") if p.strip()],
         "include_remote": args.include_remote,
+        "internship_only": internship_only,
         "max_jobs": args.max_jobs,
         "resume_path": str(resume_path),
         "profile": profile,
         "results": [],
     }
     graph = build_autonomous_graph()
-    state = asyncio.run(graph.ainvoke(initial_state, config={"recursion_limit": recursion_limit(args.max_jobs)}))
+    limit = recursion_limit(args.max_jobs, len(initial_state["platforms"]))
+    state = asyncio.run(graph.ainvoke(initial_state, config={"recursion_limit": limit}))
     _print_summary(state)
     return 0
 

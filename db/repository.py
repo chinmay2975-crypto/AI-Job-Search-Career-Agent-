@@ -3,7 +3,10 @@ from typing import Any
 
 # Application statuses where nothing was sent to the employer, so the job may be tried again.
 # Every other status (submitted, unconfirmed, pending_approval, approved, blocked, ...) blocks a re-apply.
-RETRYABLE_STATUSES = ("failed", "dry_run", "needs_manual")
+# "superseded" marks an earlier attempt replaced by a newer one for the same job.
+# "verification_required" also sent nothing but is deliberately not retried: every attempt can make the
+# site email the user another security code.
+RETRYABLE_STATUSES = ("failed", "dry_run", "needs_manual", "superseded")
 
 
 class Repository(ABC):
@@ -89,3 +92,14 @@ class Repository(ABC):
 
     @abstractmethod
     def list_application_events(self, application_id: str) -> list[dict[str, Any]]: ...
+
+    @abstractmethod
+    def supersede_retryable_applications(self, job_id: str, candidate_id: str) -> None:
+        """Mark earlier not-sent attempts for this job as superseded before a new attempt starts."""
+
+    @abstractmethod
+    def get_saved_answers(self, candidate_id: str) -> dict[str, str]:
+        """Answers the user gave while approving held applications, keyed by normalized question text."""
+
+    @abstractmethod
+    def save_answer(self, candidate_id: str, question_label: str, answer: str) -> None: ...

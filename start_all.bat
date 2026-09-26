@@ -1,4 +1,3 @@
 @echo off
-cd /d "%~dp0"
-start "career-agent-backend" /min cmd /c start_backend.bat
-start "career-agent-frontend" /min cmd /c start_frontend.bat
+rem Start both servers (hidden, self-restarting) and open the app in the browser.
+wscript "%~dp0open_career_agent.vbs"

@@ -10,6 +10,7 @@ def run(state: AutonomousState) -> AutonomousState:
         location=state.get("location", ""),
         platforms=tuple(state.get("platforms") or DEFAULT_PLATFORMS),
         include_remote=state.get("include_remote", False),
+        internship_only=state.get("internship_only", False),
     )
 
     # Skip jobs this candidate already has a live application for (submitted, unconfirmed, awaiting review).

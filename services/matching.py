@@ -28,16 +28,20 @@ def _overlap_ratio(candidate_items: list[str], required_items: list[str]) -> flo
     return len(candidate_set & required_set) / len(required_set)
 
 
-def score_match(candidate: dict, job: dict) -> dict:
+def score_match(candidate: dict, job: dict, unknown_skills_credit: float | None = None) -> dict:
     """Deterministic weighted match score between a candidate profile and a job listing.
 
     candidate: {skills: [str], education_level: str, years_experience: float,
                 projects: [str], location: str}
     job: {required_skills: [str], min_education_level: str, min_years_experience: float,
           location: str, description: str}
+    unknown_skills_credit: skills credit when the job lists no required skills (default: full credit).
     Returns per-component scores (0-1) and an overall weighted score (0-100).
     """
-    skills_score = _overlap_ratio(candidate.get("skills", []), job.get("required_skills", []))
+    if unknown_skills_credit is not None and not job.get("required_skills"):
+        skills_score = unknown_skills_credit
+    else:
+        skills_score = _overlap_ratio(candidate.get("skills", []), job.get("required_skills", []))
 
     education_score = 1.0 if _education_meets(
         candidate.get("education_level", ""), job.get("min_education_level", "")

@@ -1,8 +1,11 @@
-"""Find open postings directly on ATS platforms (not job-board aggregators).
+"""Find open postings on company ATS platforms and on job boards.
 
-Discovery = site-restricted web search for posting URLs, then enrichment through each
-platform's public job API. The API fetch doubles as a liveness check: stale search
-results for closed postings 404 and are dropped.
+Discovery = site-restricted web search for posting URLs, then enrichment:
+- ATS platforms (Greenhouse, Lever, Workday, Ashby, Workable, SmartRecruiters) through each
+  platform's public job API. The API fetch doubles as a liveness check: stale search results for
+  closed postings 404 and are dropped.
+- Job boards (Internshala, LinkedIn, Naukri, ...) from the search result itself - see
+  services/board_sources.py. LinkedIn pages are never fetched.
 """
 
 import html
@@ -11,19 +14,27 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from services import board_sources
 from services.job_search import serper_search
 
 _GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards"
 _LEVER_API_HOSTS = {"jobs.lever.co": "https://api.lever.co", "jobs.eu.lever.co": "https://api.eu.lever.co"}
+_ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board"
+_WORKABLE_API = "https://apply.workable.com/api/v1"
+_SMARTRECRUITERS_API = "https://api.smartrecruiters.com/v1/companies"
 
 _SITE_FILTERS = {
     "greenhouse": "(site:job-boards.greenhouse.io OR site:boards.greenhouse.io)",
     "lever": "(site:jobs.lever.co OR site:jobs.eu.lever.co)",
     "workday": "site:myworkdayjobs.com",
+    "ashby": "site:jobs.ashbyhq.com",
+    "workable": "site:apply.workable.com",
+    "smartrecruiters": "site:jobs.smartrecruiters.com",
+    **board_sources.SITE_FILTERS,
 }
 
 SUPPORTED_PLATFORMS = tuple(_SITE_FILTERS)
-DEFAULT_PLATFORMS = ("greenhouse", "lever")
+DEFAULT_PLATFORMS = SUPPORTED_PLATFORMS
 
 # Board-only search results (a company's whole board) are expanded, capped per board so a
 # single large employer can't flood the results.
@@ -169,6 +180,7 @@ def normalize_greenhouse_job(board: str, data: dict) -> dict:
         "board": board,
         "external_id": job_id,
         "questions": (data.get("questions") or []) + (data.get("location_questions") or []),
+        "education_requirement": data.get("education") or "",  # education_required / education_optional
         "compliance": data.get("compliance") or [],
         "demographic_questions": data.get("demographic_questions") or {},
         "required_skills": [],
@@ -224,6 +236,7 @@ def normalize_lever_job(company: str, data: dict) -> dict:
         "location": location,
         "locations": locations,
         "is_remote": workplace_type == "remote" or any("remote" in loc.lower() for loc in locations),
+        "employment_type": categories.get("commitment", ""),  # e.g. "Full-time", "Intern"
         "platform": "lever",
         "board": company,
         "external_id": data["id"],
@@ -278,7 +291,7 @@ def normalize_workday_job(host: str, tenant: str, site: str, job_path: str, data
 
 def _workday_job_from_search_result(host: str, tenant: str, site: str, job_path: str, result: dict) -> dict:
     snippet = result.get("snippet", "")
-    title = re.sub(r"\s*[-|]\s*Workday.*$", "", result.get("title", ""), flags=re.IGNORECASE)
+    title = re.sub(r"\s*[-|]\s*(my)?workday(jobs\.com)?.*$", "", result.get("title", ""), flags=re.IGNORECASE)
     # Without the API, the snippet is the only place a location can appear.
     return _workday_listing(
         f"https://{host}/{site}/{job_path}", title, tenant.replace("-", " ").title(), snippet,
@@ -311,10 +324,183 @@ def _workday_listing(url, title, company, description, locations, tenant, extern
     }
 
 
+# --- Ashby --------------------------------------------------------------------------
+
+def parse_ashby_url(url: str) -> tuple[str, str | None] | None:
+    """Return (org, job_id) for jobs.ashbyhq.com/{org}[/{uuid}[/application]]; job_id None = board page."""
+    parsed = urlparse(url)
+    if parsed.netloc.lower() != "jobs.ashbyhq.com":
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if not parts:
+        return None
+    job_id = parts[1] if len(parts) >= 2 and _looks_like_uuid(parts[1]) else None
+    return parts[0], job_id
+
+
+def _ashby_board(org: str) -> list[dict] | None:
+    response = _http.get(f"{_ASHBY_API}/{org}")
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return [j for j in response.json().get("jobs", []) if j.get("isListed", True)]
+
+
+def normalize_ashby_job(org: str, data: dict) -> dict:
+    locations = [data.get("location", "")] + [
+        (loc.get("location") if isinstance(loc, dict) else str(loc)) for loc in data.get("secondaryLocations") or []
+    ]
+    locations = [loc for loc in locations if loc]
+    return _listing(
+        platform="ashby", board=org, external_id=data["id"], title=data.get("title", ""),
+        company=org.replace("-", " ").title(), url=data.get("jobUrl") or f"https://jobs.ashbyhq.com/{org}/{data['id']}",
+        apply_url=data.get("applyUrl") or f"https://jobs.ashbyhq.com/{org}/{data['id']}/application",
+        description=data.get("descriptionPlain") or html_to_text(data.get("descriptionHtml", "")),
+        locations=locations, is_remote=bool(data.get("isRemote")) or any("remote" in l.lower() for l in locations),
+        employment_type=data.get("employmentType", ""),
+    )
+
+
+def _resolve_ashby(url: str, query: str) -> list[dict]:
+    parsed = parse_ashby_url(url)
+    if not parsed:
+        return []
+    org, job_id = parsed
+    board = _ashby_board(org)
+    if board is None:
+        return []
+    if job_id:
+        return [normalize_ashby_job(org, j) for j in board if j.get("id") == job_id]
+    listed = [j for j in board if _matches_keywords(j.get("title", ""), query)]
+    return [normalize_ashby_job(org, j) for j in listed[:_MAX_JOBS_PER_BOARD]]
+
+
+# --- Workable -------------------------------------------------------------------------
+
+def parse_workable_url(url: str) -> tuple[str, str] | None:
+    """Return (account, shortcode) for apply.workable.com/{account}/j/{shortcode}[/apply]."""
+    parsed = urlparse(url)
+    if parsed.netloc.lower() != "apply.workable.com":
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 3 and parts[1] == "j":
+        return parts[0], parts[2]
+    return None
+
+
+def fetch_workable_job(account: str, shortcode: str) -> dict | None:
+    response = _http.get(f"{_WORKABLE_API}/accounts/{account}/jobs/{shortcode}")
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    data = response.json()
+    if data.get("state") and data["state"] != "published":
+        return None
+    form = _http.get(f"{_WORKABLE_API}/jobs/{shortcode}/form")
+    return normalize_workable_job(account, data, form.json() if form.status_code == 200 else [])
+
+
+def normalize_workable_job(account: str, data: dict, form_sections: list) -> dict:
+    locations = []
+    for loc in [data.get("location") or {}, *(data.get("locations") or [])]:
+        text = ", ".join(p for p in [loc.get("city"), loc.get("region"), loc.get("country")] if p)
+        if text and text not in locations:
+            locations.append(text)
+    description = "\n".join(html_to_text(data.get(k, "")) for k in ("description", "requirements", "benefits"))
+    shortcode = data.get("shortcode", "")
+    url = f"https://apply.workable.com/{account}/j/{shortcode}/"
+    job = _listing(
+        platform="workable", board=account, external_id=shortcode, title=data.get("title", ""),
+        company=account.replace("-", " ").title(), url=url, apply_url=f"{url}apply/", description=description.strip(),
+        locations=locations, is_remote=bool(data.get("remote")) or (data.get("workplace") or "").lower() == "remote",
+    )
+    job["workable_form"] = form_sections  # public form schema: field ids, types, options, required flags
+    return job
+
+
+# --- SmartRecruiters (discovery only: its apply pages sit behind bot protection) ----------
+
+def parse_smartrecruiters_url(url: str) -> tuple[str, str] | None:
+    """Return (company, posting_id) for jobs.smartrecruiters.com/{Company}/{id}-{slug}."""
+    parsed = urlparse(url)
+    if parsed.netloc.lower() != "jobs.smartrecruiters.com":
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 2 and re.match(r"^\d+", parts[1]):
+        return parts[0], re.match(r"^\d+", parts[1]).group(0)
+    return None
+
+
+def fetch_smartrecruiters_job(company: str, posting_id: str) -> dict | None:
+    response = _http.get(f"{_SMARTRECRUITERS_API}/{company}/postings/{posting_id}")
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    data = response.json()
+    if data.get("active") is False:
+        return None
+    location = data.get("location") or {}
+    city_region = ", ".join(p for p in [location.get("city"), location.get("region"), location.get("country")] if p)
+    sections = ((data.get("jobAd") or {}).get("sections") or {}).values()
+    description = "\n".join(html_to_text(s.get("text", "")) for s in sections if isinstance(s, dict))
+    return _listing(
+        platform="smartrecruiters", board=company, external_id=posting_id, title=data.get("name", ""),
+        company=(data.get("company") or {}).get("name") or company,
+        url=data.get("postingUrl") or f"https://jobs.smartrecruiters.com/{company}/{posting_id}",
+        apply_url=data.get("applyUrl", ""), description=description.strip(),
+        locations=[city_region] if city_region else [], is_remote=bool(location.get("remote")),
+        employment_type=(data.get("typeOfEmployment") or {}).get("label", ""),
+    )
+
+
+def _listing(platform, board, external_id, title, company, url, apply_url, description, locations,
+             is_remote=False, employment_type="") -> dict:
+    return {
+        "title": title,
+        "company": company,
+        "link": url,
+        "url": url,
+        "apply_url": apply_url or url,
+        "snippet": description[:300],
+        "description": description,
+        "location": locations[0] if locations else "",
+        "locations": locations,
+        "is_remote": is_remote,
+        "employment_type": employment_type,
+        "platform": platform,
+        "board": board,
+        "external_id": str(external_id),
+        "questions": [],
+        "compliance": [],
+        "demographic_questions": {},
+        "required_skills": [],
+        "min_education_level": "",
+        "min_years_experience": 0,
+        "source": "ats_discovery",
+    }
+
+
 # --- Orchestration ------------------------------------------------------------------
 
 def resolve_url(platform: str, url: str, query: str, search_result: dict | None = None) -> list[dict]:
     """Turn one search-result URL into zero or more normalized, currently-open jobs."""
+    if platform in board_sources.SITE_FILTERS:
+        job = board_sources.resolve(platform, url, search_result or {})
+        return [job] if job else []
+
+    if platform == "ashby":
+        return _resolve_ashby(url, query)
+
+    if platform == "workable":
+        parsed = parse_workable_url(url)
+        job = fetch_workable_job(*parsed) if parsed else None
+        return [job] if job else []
+
+    if platform == "smartrecruiters":
+        parsed = parse_smartrecruiters_url(url)
+        job = fetch_smartrecruiters_job(*parsed) if parsed else None
+        return [job] if job else []
+
     if platform == "greenhouse":
         parsed = parse_greenhouse_url(url)
         if not parsed:
@@ -345,20 +531,33 @@ def resolve_url(platform: str, url: str, query: str, search_result: dict | None 
     return []
 
 
+_INTERNSHIP_PATTERN = re.compile(r"\bintern(ship)?s?\b", re.IGNORECASE)
+
+
+def is_internship(job: dict) -> bool:
+    """An internship by its title, or by Lever's commitment field ("Intern", "Internship")."""
+    return bool(_INTERNSHIP_PATTERN.search(job.get("title", "")) or
+                _INTERNSHIP_PATTERN.search(job.get("employment_type", "") or ""))
+
+
 def discover_jobs(
     query: str,
     location: str,
     platforms: tuple[str, ...] = DEFAULT_PLATFORMS,
     num_results: int = 10,
     include_remote: bool = False,
+    internship_only: bool = False,
 ) -> dict:
     """Search each platform, resolve results to open jobs, filter by location, dedupe.
 
+    With internship_only, the search asks for internships and only intern roles are kept.
     Returns {"jobs": [...], "errors": [...]} - a single bad URL never aborts discovery.
     """
     jobs: list[dict] = []
     errors: list[str] = []
     seen: set[tuple[str, str, str]] = set()
+    if internship_only and not _INTERNSHIP_PATTERN.search(query):
+        query = f"{query} intern".strip()
 
     for platform in platforms:
         if platform not in _SITE_FILTERS:
@@ -385,7 +584,24 @@ def discover_jobs(
                 if key in seen:
                     continue
                 seen.add(key)
+                if internship_only and not is_internship(job):
+                    continue
                 if matches_location(job, location, include_remote):
                     jobs.append(job)
 
-    return {"jobs": jobs, "errors": errors}
+    return {"jobs": dedupe_across_sources(jobs), "errors": errors}
+
+
+def dedupe_across_sources(jobs: list[dict]) -> list[dict]:
+    """One posting per (company, title): the same internship is often on several sites; keep the
+    copy where the agent can do the most (auto-apply > draft > link)."""
+    rank = {platform: i for i, platform in enumerate(board_sources.SOURCE_PRIORITY)}
+    best: dict[tuple[str, str], dict] = {}
+    unkeyed = []
+    for job in jobs:
+        key = board_sources.dedupe_key(job)
+        if key is None:
+            unkeyed.append(job)
+        elif key not in best or rank.get(job["platform"], 99) < rank.get(best[key]["platform"], 99):
+            best[key] = job
+    return list(best.values()) + unkeyed

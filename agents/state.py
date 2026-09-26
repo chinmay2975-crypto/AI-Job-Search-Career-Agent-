@@ -35,6 +35,7 @@ class GraphState(TypedDict, total=False):
     candidate: CandidateProfile
     search_query: str
     location: str
+    internship_only: bool
     jobs: list[JobListing]
     matches: list[MatchResult]
     skill_gaps: list[str]
@@ -72,6 +73,7 @@ class AutonomousState(TypedDict, total=False):
     query: str
     platforms: list[str]
     include_remote: bool
+    internship_only: bool
     max_jobs: int
     resume_path: str
     profile: dict

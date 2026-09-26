@@ -19,9 +19,19 @@ def repo():
     [
         ("https://boards.greenhouse.io/acme/jobs/123", "greenhouse", "auto_submit"),
         ("https://jobs.lever.co/acme/456", "lever", "auto_submit"),
+        ("https://jobs.ashbyhq.com/acme/b4a4f30b-ea11-41c7-bb46-9984165d768b", "ashby", "auto_submit"),
+        ("https://apply.workable.com/acme/j/C00D380D98/", "workable", "auto_submit"),
+        ("https://jobs.smartrecruiters.com/Acme/743999681813542-intern", "smartrecruiters", "assisted_draft"),
         ("https://acme.myworkdayjobs.com/careers/job/789", "workday", "assisted_draft"),
-        ("https://www.indeed.com/viewjob?jk=abc", "indeed", "assisted_draft"),
-        ("https://www.linkedin.com/jobs/view/123", "linkedin", "blocked"),
+        ("https://internshala.com/internship/detail/python-internship-in-pune-at-x123", "internshala", "assisted_draft"),
+        ("https://www.indeed.com/viewjob?jk=abc", "indeed", "link_only"),
+        ("https://www.linkedin.com/jobs/view/123", "linkedin", "link_only"),
+        ("https://in.linkedin.com/jobs/view/python-intern-4247033283", "linkedin", "link_only"),
+        ("https://www.naukri.com/job-listings-python-intern-x-pune-0-to-1-years-123", "naukri", "link_only"),
+        ("https://wellfound.com/jobs/4266024-backend-intern", "wellfound", "link_only"),
+        ("https://unstop.com/internships/python-internship-x-1548234", "unstop", "link_only"),
+        ("https://www.glassdoor.co.in/job-listing/python-intern-x-JV_IC1.htm", "glassdoor", "link_only"),
+        ("https://www.foundit.in/job/python-intern-x-123", "foundit", "link_only"),
         ("https://synthetic-jobs.local/postings/backend-engineer", "synthetic", "auto_submit"),
         ("https://random-startup.example.com/careers/eng", "unknown", "blocked"),
     ],
@@ -32,9 +42,9 @@ def test_ats_classification(url, expected_ats, expected_strategy):
     assert ats_classifier.execution_strategy(ats_type) == expected_strategy
 
 
-# --- classify_ats_agent: score gate + LinkedIn hard-stop --------------------
+# --- classify_ats_agent: score gate + LinkedIn link-only ----------------------
 
-def test_classify_ats_agent_blocks_linkedin(repo):
+def test_classify_ats_agent_lists_linkedin_without_any_action(repo):
     from agents import classify_ats_agent
 
     with patch("agents.classify_ats_agent.get_repository", return_value=repo):
@@ -49,8 +59,22 @@ def test_classify_ats_agent_blocks_linkedin(repo):
         }
         result = classify_ats_agent.run(state)
 
-    assert result["execution_strategy"] == "blocked"
-    assert repo.get_application(application["id"])["status"] == "blocked"
+    assert result["execution_strategy"] == "link_only"
+    assert repo.get_application(application["id"])["status"] == "apply_yourself"
+    assert [e["event_type"] for e in repo.list_application_events(application["id"])] == ["lead"]
+
+
+async def test_linkedin_application_never_drafts_or_submits(tmp_path, monkeypatch):
+    """Through the whole per-job graph: a LinkedIn posting ends at apply_yourself - no LLM, no browser."""
+    monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "a.db"))
+    monkeypatch.setenv("MATCH_SCORE_THRESHOLD", "70")
+    from services import application_runner
+
+    job = {"link": "https://in.linkedin.com/jobs/view/python-intern-4247033283", "title": "Python Intern"}
+    with patch("agents.cover_letter_agent.complete", side_effect=AssertionError("no drafting for LinkedIn")), \
+            patch("services.playwright_apply.async_playwright", side_effect=AssertionError("no browser for LinkedIn")):
+        result = await application_runner.start_application("c1", job, 85.0, profile={})
+    assert result["status"] == "apply_yourself"
 
 
 def test_classify_ats_agent_blocks_below_threshold(repo, monkeypatch):

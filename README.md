@@ -78,63 +78,86 @@ The file holds your application history and parsed resume, so it is gitignored. 
 
 ## Running locally
 
-Start the backend:
+**One-time setup (Windows):** run `install_autostart.bat`. From then on the backend and the UI start
+hidden at every login, restart themselves if they crash, and a **Career Agent** shortcut on the desktop
+opens the app (starting the servers first if needed). `uninstall_autostart.bat` undoes it.
+
+Without autostart, `start_all.bat` does the same once. Both servers listen on this machine only
+(127.0.0.1). Logs: `logs/uvicorn.log`, `logs/streamlit.log`, `logs/launcher.log`. By hand:
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --port 8010      # backend - port 8010, so it doesn't clash with other apps on 8000
+streamlit run app.py              # frontend, in a separate terminal
 ```
 
-API docs (Swagger UI): http://localhost:8000/docs
-
-Start the frontend, in a separate terminal:
-
-```bash
-streamlit run app.py
-```
-
-UI: http://localhost:8501
-
-Upload a resume PDF in the sidebar, optionally set a job search query/location, and click
-**Run pipeline**.
+- UI: http://localhost:8501 — the **Applications** tab shows every application, with the ones waiting
+  for your answers at the top.
+- API docs (Swagger UI): http://localhost:8010/docs
+- To use a different backend port, set `CAREER_AGENT_API_URL` for Streamlit and `SANDBOX_APPLY_URL` in `.env`.
 
 ## Autonomous apply
 
 ```bash
 python -m autonomous_apply --location "Pune" --resume C:\path\to\resume.pdf
-# options: --query "python developer"  --platforms greenhouse,lever,workday  --max-jobs 20  --include-remote
+# options: --query "python intern"  --platforms greenhouse,lever,internshala,...  --max-jobs 20  --include-remote
 ```
 
 A deterministic planner ([agents/planner_agent.py](agents/planner_agent.py)) routes between four
 specialists ([agents/autonomous_graph.py](agents/autonomous_graph.py)):
 
 1. **Resume** — parses the resume with the existing Resume Agent.
-2. **Discovery** — site-restricted search for postings directly on Greenhouse, Lever, and Workday
-   (never LinkedIn or aggregators), enriched through each platform's public job API (closed postings
-   are dropped), then filtered by `--location`.
+2. **Discovery** — site-restricted web search on every source below (all by default), filtered by
+   `--location`, then de-duplicated across sites (a posting listed on several sites is kept once, on the
+   site where the agent can do the most).
 3. **Matching** — the LLM extracts each posting's required skills/years/education; the existing
-   deterministic `score_match` scores it. Postings with no extractable requirements are skipped.
-4. **Apply** — for each posting above `MATCH_SCORE_THRESHOLD`, runs the per-application flow
-   (classify ATS → draft cover letter → submit or hand off):
-   - **Greenhouse / Lever**: fills the real form with Playwright, attaches the resume and a cover
-     letter PDF, and clicks Submit. Success is recorded only when a confirmation is detected.
-   - **Workday**: drafted only — lands as `pending_approval` for you to submit by hand.
+   deterministic `score_match` scores it. Auto-apply sources need extractable requirements; board
+   postings that only have a search snippet get neutral (not full) skills credit.
+4. **Apply** — each posting above `MATCH_SCORE_THRESHOLD` goes through the per-application flow:
+
+| Source | What the agent does | Where it shows up |
+|---|---|---|
+| Greenhouse, Lever, Ashby, Workable | Fills the real form (resume, cover letter, answers) and clicks Submit; success only on a detected confirmation. Unanswerable questions → held for your approval. | Submitted / Needs your approval |
+| Internshala, SmartRecruiters, Workday | Drafts the cover letter ("why should you be hired"); **you** apply on the site. Internshala needs your account and SmartRecruiters blocks bots, so these are never automated. | Drafted for you to send |
+| LinkedIn, Naukri, Indeed, Wellfound, Unstop, Glassdoor, Foundit | Lists the posting with its match score and link — nothing else. LinkedIn pages are never opened. | Apply yourself |
+
+How postings are read: Greenhouse, Lever, Ashby, Workable, SmartRecruiters and Workday through their
+public job APIs (closed postings are dropped); Internshala from its posting pages (allowed by its
+robots.txt, requests spaced out); every other board only from the search result itself.
+
+Cookie banners that block a form are closed with the no-tracking choice ("Decline all" / "Reject");
+cookies are never accepted on your behalf. CAPTCHA challenges are never solved or bypassed.
 
 **Setup before the first run**
 - `python -m playwright install chromium`
 - Copy `candidate_profile.example.yaml` to `candidate_profile.yaml` (gitignored) and fill it in.
   Screening questions about you (work authorization, sponsorship, notice period, CTC, availability,
-  shift/hybrid preferences, EEO) are answered **only** from this file; add `custom_answers` rules for
-  questions you see in the audit log. The LLM only answers required questions it can prove from your
-  resume (a dropdown answer must cite text that actually appears in it).
+  shift/hybrid preferences, EEO) are answered **only** from this file and from answers you've approved
+  before. The LLM only answers required questions it can prove from your resume (a dropdown answer must
+  cite text that actually appears in it).
+
+- `job_type: internship` in the profile limits every search to intern roles (the search asks for
+  internships and non-intern postings are dropped); `--job-type any` overrides it for one run. The
+  profile's `education` block fills forms that have an Education section.
+
+**Approving held applications.** Any required question the profile and resume can't answer holds the
+application as `needs_manual` — nothing is sent. In the Streamlit **Applications** tab, under
+*Needs your approval*, answer the listed questions and click **Approve & submit** (or **Approve & fill**
+in dry-run mode): the agent re-fills the real form with your answers. With *Remember these answers* on,
+the same question on later forms is answered automatically (they only fill gaps — they never override
+`candidate_profile.yaml`). Questions that need a file upload or checkbox can only be done on the site.
 
 **Statuses** (Streamlit Applications tab and `logs/applications_audit.csv`)
 - `submitted` — confirmation detected.
-- `needs_manual` — nothing was sent: an unanswerable required question, an unfillable field, or a
-  CAPTCHA challenge (challenges are never solved automatically). Retried on the next run, so adding the
-  missing `custom_answers` and re-running is enough.
+- `needs_manual` — nothing was sent: waiting for your answers (approve in Streamlit), an unfillable
+  field, or a CAPTCHA challenge (challenges are never solved automatically). Also retried on the next run.
+- `verification_required` — after the form was filled, the site asked for a human check (CAPTCHA or a
+  security code emailed to you). Nothing was sent; the agent never completes these. Apply on the site
+  yourself. Not retried automatically (each attempt could email you another code).
+- `apply_yourself` — a LinkedIn / job-board posting listed with its score and link.
 - `unconfirmed` — Submit was clicked but no confirmation appeared. Check the screenshot / your email.
   Never retried automatically, so it can't produce a duplicate application.
 - `dry_run`, `failed` — nothing was sent; retried on the next run.
+- `superseded` — an earlier not-sent attempt replaced by a newer one for the same job (hidden by default).
 
 > **`DRY_RUN`** (in `.env`) decides whether Submit is clicked. With `DRY_RUN=true` the agent still fills
 > every form and saves a screenshot to `logs/screenshots/`, but submits nothing — use it after changing

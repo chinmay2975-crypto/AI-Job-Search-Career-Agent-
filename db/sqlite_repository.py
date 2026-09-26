@@ -62,7 +62,17 @@ CREATE TABLE IF NOT EXISTS applications (
     submitted_at TEXT,
     application_url TEXT,
     error_log TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    pending_questions TEXT,  -- JSON: required questions awaiting the user's answer (needs_manual)
+    job_snapshot TEXT,       -- JSON: the job as discovered, so an approval can re-run the application
+    resume_path TEXT
+);
+CREATE TABLE IF NOT EXISTS saved_answers (
+    candidate_id TEXT NOT NULL,
+    question_label TEXT NOT NULL,  -- normalized question text
+    answer TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (candidate_id, question_label)
 );
 CREATE TABLE IF NOT EXISTS application_events (
     id TEXT PRIMARY KEY,
@@ -77,11 +87,15 @@ CREATE INDEX IF NOT EXISTS idx_applications_candidate_status ON applications(can
 CREATE INDEX IF NOT EXISTS idx_application_events_application_id ON application_events(application_id);
 """
 
+# Columns added after the first release; created on older databases by _migrate().
+_ADDED_APPLICATION_COLUMNS = ["pending_questions", "job_snapshot", "resume_path"]
+
 _APPLICATION_COLUMNS = [
     "id", "job_id", "candidate_id", "match_score", "ats_type", "execution_strategy",
     "status", "cover_letter_text", "thread_id", "submitted_at", "application_url",
-    "error_log", "created_at",
+    "error_log", "created_at", *_ADDED_APPLICATION_COLUMNS,
 ]
+_JSON_COLUMNS = {"pending_questions", "job_snapshot"}
 
 _JOB_COLUMNS = ["id", "title", "company", "url", "description", "location", "ats_type", "source", "created_at"]
 
@@ -91,7 +105,14 @@ def _now() -> str:
 
 
 def _row_to_dict(row: sqlite3.Row, columns: list[str]) -> dict[str, Any]:
-    return {col: row[col] for col in columns}
+    result = {col: row[col] for col in columns}
+    for col in _JSON_COLUMNS & result.keys():
+        result[col] = json.loads(result[col]) if result[col] else None
+    return result
+
+
+def _encode(value: Any) -> Any:
+    return json.dumps(value) if isinstance(value, (dict, list)) else value
 
 
 class SQLiteRepository(Repository):
@@ -106,7 +127,14 @@ class SQLiteRepository(Repository):
         if db_path != ":memory:":
             self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        existing = {row[1] for row in self._conn.execute("PRAGMA table_info(applications)")}
+        for column in _ADDED_APPLICATION_COLUMNS:
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE applications ADD COLUMN {column} TEXT")
 
     def _get_json(self, table: str, key_col: str, key: str) -> Any | None:
         row = self._conn.execute(f"SELECT data FROM {table} WHERE {key_col} = ?", (key,)).fetchone()
@@ -230,13 +258,14 @@ class SQLiteRepository(Repository):
             "application_url": application.get("application_url", ""),
             "error_log": application.get("error_log", ""),
             "created_at": _now(),
+            "pending_questions": application.get("pending_questions"),
+            "job_snapshot": application.get("job_snapshot"),
+            "resume_path": application.get("resume_path", ""),
         }
+        columns = ", ".join(row)
         self._conn.execute(
-            "INSERT INTO applications (id, job_id, candidate_id, match_score, ats_type, execution_strategy, "
-            "status, cover_letter_text, thread_id, submitted_at, application_url, error_log, created_at) "
-            "VALUES (:id, :job_id, :candidate_id, :match_score, :ats_type, :execution_strategy, :status, "
-            ":cover_letter_text, :thread_id, :submitted_at, :application_url, :error_log, :created_at)",
-            row,
+            f"INSERT INTO applications ({columns}) VALUES ({', '.join(':' + c for c in row)})",
+            {k: _encode(v) for k, v in row.items()},
         )
         self._conn.commit()
         return row
@@ -249,8 +278,32 @@ class SQLiteRepository(Repository):
         if not fields:
             return
         set_clause = ", ".join(f"{col} = :{col}" for col in fields)
-        params = {**fields, "id": application_id}
+        params = {**{k: _encode(v) for k, v in fields.items()}, "id": application_id}
         self._conn.execute(f"UPDATE applications SET {set_clause} WHERE id = :id", params)
+        self._conn.commit()
+
+    def supersede_retryable_applications(self, job_id: str, candidate_id: str) -> None:
+        placeholders = ", ".join("?" for _ in RETRYABLE_STATUSES)
+        self._conn.execute(
+            f"UPDATE applications SET status = 'superseded', pending_questions = NULL "
+            f"WHERE job_id = ? AND candidate_id = ? AND status IN ({placeholders})",
+            (job_id, candidate_id, *RETRYABLE_STATUSES),
+        )
+        self._conn.commit()
+
+    def get_saved_answers(self, candidate_id: str) -> dict[str, str]:
+        rows = self._conn.execute(
+            "SELECT question_label, answer FROM saved_answers WHERE candidate_id = ?", (candidate_id,)
+        ).fetchall()
+        return {r["question_label"]: r["answer"] for r in rows}
+
+    def save_answer(self, candidate_id: str, question_label: str, answer: str) -> None:
+        self._conn.execute(
+            "INSERT INTO saved_answers (candidate_id, question_label, answer, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(candidate_id, question_label) DO UPDATE SET answer = excluded.answer, "
+            "updated_at = excluded.updated_at",
+            (candidate_id, question_label, answer, _now()),
+        )
         self._conn.commit()
 
     def list_applications(

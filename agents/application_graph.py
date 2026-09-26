@@ -10,13 +10,15 @@ def _route_after_classify(state: ApplicationState) -> str:
         return "blocked_end"
     if state.get("below_threshold"):
         return "below_threshold_end"
+    if state.get("execution_strategy") == "link_only":
+        return "lead_end"  # e.g. LinkedIn: listed with a link; no drafting, no page interaction
     return "draft"
 
 
 def _route_after_draft(state: ApplicationState) -> str:
-    # auto_submit (synthetic/greenhouse/lever) goes straight to the executor - DRY_RUN is the
-    # safety net there, not a human gate. assisted_draft (workday/indeed)
-    # always needs a human to look at the draft first, even though it can never auto-submit.
+    # auto_submit (Greenhouse/Lever/Ashby/Workable) goes straight to the executor - DRY_RUN and the
+    # held-question approvals are the safety net there. assisted_draft (Workday/Internshala/
+    # SmartRecruiters) always waits for a human, who submits on the site themselves.
     return "apply" if state.get("execution_strategy") == "auto_submit" else "await_approval"
 
 
@@ -36,7 +38,7 @@ def build_application_graph():
     graph.add_conditional_edges(
         "classify_ats",
         _route_after_classify,
-        {"blocked_end": END, "below_threshold_end": END, "draft": "draft_cover_letter"},
+        {"blocked_end": END, "below_threshold_end": END, "lead_end": END, "draft": "draft_cover_letter"},
     )
     graph.add_conditional_edges(
         "draft_cover_letter", _route_after_draft, {"apply": "apply_executor", "await_approval": "await_approval"}

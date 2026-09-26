@@ -1,6 +1,7 @@
 from agents.state import ApplicationState
 from db import get_repository
 from services import ats_classifier
+from services.board_sources import DISPLAY_NAMES
 from services.safety_rails import match_score_threshold
 
 
@@ -16,11 +17,15 @@ def run(state: ApplicationState) -> ApplicationState:
     repo.update_application(application_id, {"ats_type": ats_type, "execution_strategy": strategy})
 
     if strategy == "blocked":
-        detail = "LinkedIn posting: handle manually, no agent action taken" if ats_type == "linkedin" else f"unclassifiable ATS ({ats_type})"
         repo.update_application(application_id, {"status": "blocked"})
-        repo.add_application_event(application_id, "blocked", detail)
+        repo.add_application_event(application_id, "blocked", f"unclassifiable site ({ats_type})")
     elif below_threshold:
         repo.update_application(application_id, {"status": "blocked"})
         repo.add_application_event(application_id, "blocked", "match score below threshold")
+    elif strategy == "link_only":
+        # Listed for you with its score and link; the agent does nothing else with it.
+        site = DISPLAY_NAMES.get(ats_type, ats_type)
+        repo.update_application(application_id, {"status": "apply_yourself"})
+        repo.add_application_event(application_id, "lead", f"found on {site} - apply on the site yourself")
 
     return {**state, "ats_type": ats_type, "execution_strategy": strategy, "below_threshold": below_threshold}

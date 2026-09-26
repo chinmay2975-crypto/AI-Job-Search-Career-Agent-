@@ -5,6 +5,8 @@
 # question isn't covered here (or provably by your resume), that job is marked needs_manual
 # instead of submitted.
 
+job_type: "any"           # "internship" = search and apply to intern roles only; "any" = all roles
+
 first_name: ""
 last_name: ""
 email: ""
@@ -17,6 +19,15 @@ years_experience: 0       # overall professional years; answers "years of experi
 linkedin_url: ""
 github_url: ""
 portfolio_url: ""
+
+# Education, for forms with an Education section. school and degree are matched against the
+# form's dropdown options (e.g. degree "Bachelor's Degree").
+education:
+  school: ""
+  degree: ""
+  discipline: ""
+  start_year: ""
+  end_year: ""
 
 # EEO / demographic questions. "decline" picks the option that declines to answer
 # ("Decline To Self Identify", "I don't wish to answer", ...). If a form has no decline option

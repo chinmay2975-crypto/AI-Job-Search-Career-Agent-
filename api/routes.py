@@ -5,9 +5,17 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from agents.graph import build_graph
 from db import get_repository
 from services.application_runner import stored_resume_path
+from services.candidate_profile import load_profile
 
 router = APIRouter()
 _graph = build_graph()
+
+
+def _profile_job_type() -> str:
+    try:
+        return str(load_profile().get("job_type") or "any").strip().lower()
+    except FileNotFoundError:
+        return "any"
 
 
 @router.post("/pipeline/run")
@@ -26,6 +34,7 @@ async def run_pipeline(
         "resume_bytes": resume_bytes,
         "search_query": search_query,
         "location": location,
+        "internship_only": _profile_job_type() == "internship",
     }
 
     config = {"configurable": {"thread_id": candidate_id or str(uuid.uuid4())}}

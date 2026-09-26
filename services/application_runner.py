@@ -51,6 +51,10 @@ async def start_application(
     if not resume_path and stored_resume_path(candidate_id).exists():
         resume_path = str(stored_resume_path(candidate_id))
 
+    # Earlier attempts that sent nothing (dry runs, held for answers) are replaced by this one,
+    # so each job shows up once in the Applications tab.
+    repo.supersede_retryable_applications(job_row["id"], candidate_id)
+
     application_id = str(uuid.uuid4())
     repo.create_application(
         {
@@ -60,6 +64,8 @@ async def start_application(
             "match_score": match_score,
             "thread_id": application_id,
             "status": "draft",
+            "job_snapshot": job,
+            "resume_path": resume_path or "",
         }
     )
     repo.add_application_event(application_id, "started", "application pipeline started")
@@ -106,6 +112,51 @@ async def approve_application(application_id: str, cover_letter_text: str | None
         Command(resume={"approved": True, "cover_letter_text": cover_letter_text}), config=config
     )
     return summarize(application_id, result)
+
+
+class NotAwaitingAnswersError(Exception):
+    pass
+
+
+async def answer_and_submit(application_id: str, answers: dict[str, str], remember: bool = True) -> dict:
+    """Approve a held (needs_manual) application: re-run it with the user's answers.
+
+    `answers` maps question key -> answer for the questions listed in pending_questions. With
+    `remember`, each valid answer is saved so the same question on a later form is answered
+    automatically. Submit is clicked only if DRY_RUN is off, exactly as in the original run.
+    """
+    from agents.apply_executor_agent import execute_submission  # avoids an import cycle with the graph
+    from services.form_answers import Question, normalize_label, validated_answer
+
+    repo = get_repository()
+    application = repo.get_application(application_id)
+    if not application or application.get("status") != "needs_manual":
+        raise NotAwaitingAnswersError("only applications held for your answers (needs_manual) can be approved")
+    job = application.get("job_snapshot")
+    if not job:
+        raise NotAwaitingAnswersError("this application predates approvals; re-run it from the CLI instead")
+
+    answers = {k: str(v).strip() for k, v in (answers or {}).items() if str(v).strip()}
+    if remember:
+        for raw in application.get("pending_questions") or []:
+            q = Question(**raw)
+            value = validated_answer(q, answers.get(q.key))
+            if value:
+                repo.save_answer(application["candidate_id"], normalize_label(q.label), value)
+
+    repo.add_application_event(application_id, "approved", f"answered {len(answers)} question(s) in Streamlit")
+    await execute_submission(
+        application_id=application_id,
+        candidate_id=application["candidate_id"],
+        ats_type=application.get("ats_type", ""),
+        job=job,
+        candidate=repo.get_candidate(application["candidate_id"]) or {},
+        cover_letter_text=application.get("cover_letter_text", ""),
+        resume_path=application.get("resume_path") or None,
+        profile=_default_profile(),
+        overrides=answers,
+    )
+    return summarize(application_id, {})
 
 
 async def reject_application(application_id: str) -> dict:

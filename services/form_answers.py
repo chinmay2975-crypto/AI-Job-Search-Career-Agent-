@@ -26,10 +26,11 @@ from services.llm import complete, extract_json
 class Question:
     key: str
     label: str
-    kind: str  # text | textarea | select | multiselect | file | hidden | checkbox
+    kind: str  # text | textarea | select | multiselect | file | hidden | checkbox | unsupported
     required: bool = False
     options: list[str] = field(default_factory=list)
     eeo: bool = False
+    option_ids: list[str] = field(default_factory=list)  # per-option input names/values, where the form has them
 
 
 @dataclass
@@ -44,14 +45,25 @@ _SKIP_KEYS = {"preferred_name", "resume_text", "cover_letter_text", "longitude",
 _PROFILE_BY_KEY = {
     "first_name": "first_name",
     "last_name": "last_name",
+    "firstname": "first_name",           # Workable
+    "lastname": "last_name",
     "email": "email",
+    "_systemfield_email": "email",       # Ashby
     "phone": "phone",
+    "_systemfield_phone": "phone",
     "location": "current_location",
+    "_systemfield_location": "current_location",
     "org": "current_company",
     "urls[linkedin]": "linkedin_url",
     "urls[github]": "github_url",
     "urls[portfolio]": "portfolio_url",
     "urls[other]": "portfolio_url",
+}
+
+# Greenhouse Education section fields (ids like "school--0") -> profile["education"] keys.
+_EDUCATION_KEYS = {
+    "school": "school", "degree": "degree", "discipline": "discipline",
+    "start-year": "start_year", "end-year": "end_year",
 }
 
 _LABEL_RULES = [
@@ -137,13 +149,21 @@ def _standard_answer(q: Question, profile: dict, files: dict) -> tuple[bool, str
     if q.kind == "file":
         if key in ("resume", "cover_letter"):
             return True, files.get(key)
+        if key == "_systemfield_resume":
+            return True, files.get("resume")
         return False, None
-    if key == "name":
+    if key in ("name", "_systemfield_name"):
         return True, full_name(profile) or None
-    if key == "comments":
+    if key in ("comments", "cover_letter"):  # Lever "additional information", Workable cover letter box
         return True, files.get("cover_letter_text")
     if key in _PROFILE_BY_KEY:
         return True, _profile_value(profile, _PROFILE_BY_KEY[key])
+    education_field = _EDUCATION_KEYS.get(re.sub(r"--0$", "", key)) if key.endswith("--0") else None
+    if education_field:
+        value = str((profile.get("education") or {}).get(education_field) or "").strip() or None
+        if q.kind == "select" and q.options:
+            return True, match_option(value or "", q.options)
+        return True, value
     if re.search(r"\bcountry\b", label) and re.search(r"\bresid|\blive\b|\blocated\b|\bbased\b", label):
         country = _profile_value(profile, "country")
         if q.kind == "select":
@@ -306,13 +326,49 @@ def _llm_answers(questions: list[Question], candidate: dict, job: dict) -> dict[
 
 # --- entry points ---------------------------------------------------------------------
 
+def normalize_label(label: str) -> str:
+    """Key under which an approved answer is remembered for identical questions on later forms."""
+    return _norm(label)
+
+
+def validated_answer(q: Question, raw: str | None) -> str | None:
+    """A user-supplied (typed or remembered) answer, checked against the question's options."""
+    raw = str(raw or "").strip()
+    if not raw or q.kind in ("file", "checkbox", "hidden", "unsupported"):
+        return None
+    if q.kind == "select":
+        return match_option(raw, q.options) if q.options else raw
+    if q.kind == "multiselect":
+        picked = [match_option(part, q.options) for part in raw.split(";") if part.strip()]
+        return ";".join(picked) if picked and all(picked) else None
+    return raw
+
+
 def answer_questions(
-    questions: list[Question], profile: dict, candidate: dict, job: dict, files: dict
+    questions: list[Question], profile: dict, candidate: dict, job: dict, files: dict,
+    overrides: dict[str, str] | None = None, saved_answers: dict[str, str] | None = None,
 ) -> tuple[list[Answer], list[Question]]:
-    """Return (answers, unanswered_required). `files` = {resume, cover_letter, cover_letter_text}."""
+    """Return (answers, unanswered_required). `files` = {resume, cover_letter, cover_letter_text}.
+
+    overrides: answers the user typed while approving this application, by question key - these win.
+    saved_answers: answers remembered from earlier approvals, by normalize_label(question) - these
+    only fill questions the profile and resume leave unanswered, never replace a profile rule.
+    """
     answers: list[Answer] = []
     unanswered: list[Question] = []
     needs_llm: list[Question] = []
+    overrides = overrides or {}
+    saved = saved_answers or {}
+
+    def saved_answer(q: Question) -> str | None:
+        return validated_answer(q, saved.get(normalize_label(q.label)))
+
+    def unresolved(q: Question) -> None:
+        value = saved_answer(q)
+        if value:
+            answers.append(Answer(q, value, "saved"))
+        elif q.required:
+            unanswered.append(q)
 
     years = float(profile.get("years_experience") or candidate.get("years_experience") or 0)
 
@@ -320,12 +376,17 @@ def answer_questions(
         if q.kind == "hidden" or q.key.casefold() in _SKIP_KEYS:
             continue
 
+        value = validated_answer(q, overrides.get(q.key))
+        if value:
+            answers.append(Answer(q, value, "user"))
+            continue
+
         matched, value = _standard_answer(q, profile, files)
         if matched:
             if value:
                 answers.append(Answer(q, value, "profile"))
-            elif q.required:
-                unanswered.append(q)
+            else:
+                unresolved(q)
             continue
 
         eeo_key = _eeo_key(q)
@@ -333,16 +394,21 @@ def answer_questions(
             value = _eeo_answer(q, eeo_key, profile)
             if value:
                 answers.append(Answer(q, value, "eeo"))
-            elif q.required:
-                unanswered.append(q)
+            else:
+                unresolved(q)
             continue
 
         matched, value = _custom_rule(q, profile)
-        if matched or _is_personal(q.label) or q.kind in ("file", "checkbox"):
+        if matched or _is_personal(q.label) or q.kind in ("file", "checkbox", "unsupported"):
             if value:
                 answers.append(Answer(q, value, "custom_answers"))
-            elif q.required:
-                unanswered.append(q)
+            else:
+                unresolved(q)
+            continue
+
+        value = saved_answer(q)  # a remembered answer beats asking the LLM
+        if value:
+            answers.append(Answer(q, value, "saved"))
             continue
 
         if years > 0 and _is_overall_experience(q.label):
@@ -395,3 +461,47 @@ def questions_from_greenhouse(job: dict) -> list[Question]:
     for block in job.get("compliance") or []:
         questions.extend(_greenhouse_question(q, eeo=True) for q in block.get("questions") or [])
     return [q for q in questions if q]
+
+
+_WORKABLE_KINDS = {
+    "text": "text", "email": "text", "phone": "text", "date": "text", "numeric": "text",
+    "paragraph": "textarea", "file": "file", "boolean": "select",
+}
+
+
+def questions_from_workable(job: dict) -> list[Question]:
+    """Build Questions from Workable's public form schema kept on the discovered job."""
+    questions = []
+    for section in job.get("workable_form") or []:
+        for f in section.get("fields") or []:
+            ftype = f.get("type")
+            options = [str(o.get("value", "")) for o in f.get("options") or []]
+            option_ids = [str(o.get("name", "")) for o in f.get("options") or []]
+            if ftype in ("multiple", "dropdown"):
+                kind = "select" if f.get("singleOption", True) else "multiselect"
+            elif ftype == "boolean":
+                kind, options = "select", ["Yes", "No"]
+            else:
+                kind = _WORKABLE_KINDS.get(ftype, "unsupported")  # e.g. required "group" (education/experience)
+            questions.append(Question(
+                key=str(f.get("id", "")), label=f.get("label", ""), kind=kind,
+                required=bool(f.get("required")), options=options, option_ids=option_ids,
+            ))
+    return questions
+
+
+def questions_from_page_fields(existing: list[Question], page_fields: list[dict]) -> list[Question]:
+    """Required fields on the live form that the API schema doesn't describe (e.g. the Education
+    section). page_fields: [{"id", "label", "combobox"}] read from the page."""
+    covered = {q.key for q in existing} | {"country"}  # "country" = phone country picker, set from the profile
+    if "location" in covered:
+        covered.add("candidate-location")  # the schema's "location" question renders with this id
+    extra = []
+    for field in page_fields:
+        if field.get("id") and field["id"] not in covered:
+            covered.add(field["id"])
+            extra.append(Question(
+                key=field["id"], label=(field.get("label") or field["id"]).replace("*", "").strip(),
+                kind="select" if field.get("combobox") else "text", required=True,
+            ))
+    return extra
